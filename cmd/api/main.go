@@ -62,8 +62,13 @@ func main() {
 		log.Println("REDIS_URL not set, caching disabled")
 	}
 
-	// Создаём репозиторий с декоратором кеша
-	baseRepo := repository.NewTaskRepository(pool)
+	// Создаём outbox репозиторий
+	outboxRepo := repository.NewOutboxRepository(pool)
+
+	// Создаём базовый репозиторий с outbox
+	baseRepo := repository.NewTaskRepository(pool, outboxRepo)
+
+	// Оборачиваем в кеш, если Redis доступен
 	var taskRepo repository.TaskRepository
 	if redisCache != nil {
 		taskRepo = repository.NewTaskRepositoryCache(baseRepo, redisCache)

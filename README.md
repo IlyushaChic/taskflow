@@ -8,7 +8,7 @@
 
 - **Задача**: `id`, `title`, `description`, `status` (`new`, `in_progress`, `done`, `cancelled`), `assignee`, `due_date`, `version` (оптимистичная блокировка), `created_at`, `updated_at`, `deleted_at` (soft delete).
 - **История изменений**: `id`, `task_id`, `field_name`, `old_value`, `new_value`, `changed_at`.
-- **Outbox** (будет добавлена позже): `id`, `aggregate_id`, `event_type`, `payload`, `created_at`, `processed_at`.
+- **Outbox**: `id`, `aggregate_id`, `event_type`, `payload`, `created_at`, `processed_at`. Используется для надёжной публикации событий в брокер.
 - **Аналитика** (ClickHouse, позже): денормализованные данные для быстрых агрегатов.
 
 **Фронтенд:** React + Vite + Ant Design (UI Kit), подключение через WebSocket к real-time событиям.
@@ -52,7 +52,25 @@
 
 ---
 
-## 🚀 Запуск проекта (шаги 0–1)
+### 📌 Шаг 2 – RabbitMQ + Transactional Outbox
+
+**Что сделано:**
+- Добавлена таблица `outbox` для надёжной публикации событий.
+- В транзакции обновления задачи (создание, изменение, удаление) автоматически сохраняется событие в outbox.
+- Создан отдельный воркер (`cmd/workers/rabbit-consumer`), который каждые 5 секунд забирает необработанные сообщения из outbox, отправляет их в RabbitMQ (обменник `task_events`, очередь `email_notifications`) и помечает как обработанные.
+- Воркер имитирует отправку email (лог).
+
+**Как проверить:**
+1. Запустить RabbitMQ (Docker) и воркер.
+2. Создать или обновить задачу через API/UI – в логах воркера появится сообщение о том, что outbox обработан.
+3. Убедиться, что при ошибке в БД (неверный `version`) outbox не записывается (транзакция откатывается).
+4. Зайти в RabbitMQ Management UI (`http://localhost:15672`, логин/пароль: guest/guest) и увидеть очередь `email_notifications` (если воркер не запущен, сообщения накапливаются).
+
+**Коммит:** `feat(step2): add RabbitMQ with transactional outbox pattern`
+
+---
+
+## 🚀 Запуск проекта (шаги 0–2)
 
 ### 1️⃣ Переменные окружения
 

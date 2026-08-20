@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -21,22 +22,52 @@ type TaskRepository interface {
 }
 
 type taskRepo struct {
-	pool *pgxpool.Pool
+	pool       *pgxpool.Pool
+	outboxRepo OutboxRepository
 }
 
-func NewTaskRepository(pool *pgxpool.Pool) TaskRepository {
-	return &taskRepo{pool: pool}
+// NewTaskRepository теперь принимает OutboxRepository
+func NewTaskRepository(pool *pgxpool.Pool, outboxRepo OutboxRepository) TaskRepository {
+	return &taskRepo{
+		pool:       pool,
+		outboxRepo: outboxRepo,
+	}
 }
 
-// Create – вставка задачи
+// Create – вставка задачи + outbox-событие в одной транзакции
 func (r *taskRepo) Create(ctx context.Context, task *models.Task) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
 	query := `INSERT INTO tasks (id, title, description, status, assignee, due_date, version, created_at, updated_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
-	_, err := r.pool.Exec(ctx, query, task.ID, task.Title, task.Description, task.Status, task.Assignee, task.DueDate, task.Version, task.CreatedAt, task.UpdatedAt)
-	return err
+	_, err = tx.Exec(ctx, query, task.ID, task.Title, task.Description, task.Status, task.Assignee, task.DueDate, task.Version, task.CreatedAt, task.UpdatedAt)
+	if err != nil {
+		return err
+	}
+
+	// Outbox-событие о создании
+	payload, _ := json.Marshal(map[string]interface{}{
+		"task_id": task.ID,
+		"title":   task.Title,
+		"status":  task.Status,
+	})
+	outbox := &models.Outbox{
+		AggregateID: task.ID,
+		EventType:   "task_created",
+		Payload:     payload,
+	}
+	if err := r.outboxRepo.SaveInTransaction(ctx, tx, outbox); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
-// GetByID – получение одной
+// GetByID – без изменений (только чтение)
 func (r *taskRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Task, error) {
 	query := `SELECT id, title, description, status, assignee, due_date, version, created_at, updated_at, deleted_at
               FROM tasks WHERE id = $1 AND deleted_at IS NULL`
@@ -51,9 +82,8 @@ func (r *taskRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Task, err
 	return task, nil
 }
 
-// List – фильтрация + пагинация (offset/limit)
+// List – без изменений (только чтение)
 func (r *taskRepo) List(ctx context.Context, filter models.TaskFilter) ([]models.Task, int, error) {
-	// базовый запрос с условиями
 	conditions := []string{"deleted_at IS NULL"}
 	args := []interface{}{}
 	argPos := 1
@@ -84,7 +114,6 @@ func (r *taskRepo) List(ctx context.Context, filter models.TaskFilter) ([]models
 		whereClause = "WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	// Получаем общее количество (для пагинации)
 	countQuery := "SELECT COUNT(*) FROM tasks " + whereClause
 	var total int
 	err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total)
@@ -92,7 +121,6 @@ func (r *taskRepo) List(ctx context.Context, filter models.TaskFilter) ([]models
 		return nil, 0, err
 	}
 
-	// Основной запрос с пагинацией
 	query := `SELECT id, title, description, status, assignee, due_date, version, created_at, updated_at, deleted_at
               FROM tasks ` + whereClause + `
               ORDER BY created_at DESC
@@ -118,7 +146,7 @@ func (r *taskRepo) List(ctx context.Context, filter models.TaskFilter) ([]models
 	return tasks, total, nil
 }
 
-// Update – обновление задачи и вставка истории в одной транзакции
+// Update – обновление задачи + история + outbox в одной транзакции
 func (r *taskRepo) Update(ctx context.Context, task *models.Task, history []models.TaskHistory) error {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -150,18 +178,52 @@ func (r *taskRepo) Update(ctx context.Context, task *models.Task, history []mode
 		}
 	}
 
+	// Outbox-событие об обновлении
+	payload, _ := json.Marshal(map[string]interface{}{
+		"task_id":    task.ID,
+		"new_status": task.Status,
+	})
+	outbox := &models.Outbox{
+		AggregateID: task.ID,
+		EventType:   "task_updated",
+		Payload:     payload,
+	}
+	if err := r.outboxRepo.SaveInTransaction(ctx, tx, outbox); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 
-// Delete – soft delete (устанавливаем deleted_at)
+// Delete – soft delete + outbox в транзакции
 func (r *taskRepo) Delete(ctx context.Context, id uuid.UUID) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
 	query := `UPDATE tasks SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
-	cmd, err := r.pool.Exec(ctx, query, id)
+	cmd, err := tx.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}
 	if cmd.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
-	return nil
+
+	// Outbox-событие об удалении
+	payload, _ := json.Marshal(map[string]interface{}{
+		"task_id": id,
+	})
+	outbox := &models.Outbox{
+		AggregateID: id,
+		EventType:   "task_deleted",
+		Payload:     payload,
+	}
+	if err := r.outboxRepo.SaveInTransaction(ctx, tx, outbox); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
