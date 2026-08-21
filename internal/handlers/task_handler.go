@@ -4,30 +4,38 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"taskflow/internal/analytics"
-	"taskflow/internal/hub"
-	"taskflow/internal/models"
-	"taskflow/internal/services"
-
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+
+	"taskflow/internal/analytics"
+	"taskflow/internal/hub"
+	"taskflow/internal/kafka"
+	"taskflow/internal/models"
+	"taskflow/internal/services"
 )
 
 type TaskHandler struct {
-	service   *services.TaskService
-	hub       *hub.Hub
-	analytics *analytics.ClickHouseAnalyticsClient
+	service       *services.TaskService
+	hub           *hub.Hub
+	analytics     *analytics.ClickHouseAnalyticsClient
+	kafkaProducer *kafka.Producer
 }
 
-func NewTaskHandler(service *services.TaskService, h *hub.Hub, analytics *analytics.ClickHouseAnalyticsClient) *TaskHandler {
+func NewTaskHandler(
+	service *services.TaskService,
+	h *hub.Hub,
+	analytics *analytics.ClickHouseAnalyticsClient,
+	kafkaProducer *kafka.Producer,
+) *TaskHandler {
 	return &TaskHandler{
-		service:   service,
-		hub:       h,
-		analytics: analytics,
+		service:       service,
+		hub:           h,
+		analytics:     analytics,
+		kafkaProducer: kafkaProducer,
 	}
 }
 
-// Create создаёт новую задачу
+// Create создаёт задачу и отправляет событие в Kafka
 func (h *TaskHandler) Create(c *gin.Context) {
 	var req models.CreateTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -40,20 +48,23 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		return
 	}
 
-	if h.analytics != nil {
-		h.analytics.SendEvent(analytics.Event{
-			TaskID:    task.ID,
-			EventType: "created",
-			Status:    task.Status,
-			Assignee:  task.Assignee,
-		})
+	// Отправляем в Kafka
+	if h.kafkaProducer != nil {
+		event := map[string]interface{}{
+			"task_id":    task.ID.String(),
+			"event_type": "created",
+			"status":     task.Status,
+			"assignee":   task.Assignee,
+		}
+		_ = h.kafkaProducer.SendEvent(task.ID.String(), event)
 	}
 
-	event := hub.WebSocketEvent{
+	// WebSocket
+	wsEvent := hub.WebSocketEvent{
 		Type: "task_created",
 		Data: task,
 	}
-	if data, err := json.Marshal(event); err == nil {
+	if data, err := json.Marshal(wsEvent); err == nil {
 		h.hub.Broadcast(data)
 	}
 
@@ -90,7 +101,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": tasks, "total": total})
 }
 
-// Update обновляет задачу
+// Update обновляет задачу и отправляет событие в Kafka
 func (h *TaskHandler) Update(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -112,28 +123,28 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		return
 	}
 
-	if h.analytics != nil {
-		h.analytics.SendEvent(analytics.Event{
-			TaskID:    task.ID,
-			EventType: "updated",
-			Status:    task.Status,
-			Assignee:  task.Assignee,
-		})
+	if h.kafkaProducer != nil {
+		event := map[string]interface{}{
+			"task_id":    task.ID.String(),
+			"event_type": "updated",
+			"status":     task.Status,
+			"assignee":   task.Assignee,
+		}
+		_ = h.kafkaProducer.SendEvent(task.ID.String(), event)
 	}
 
-	// Отправка WebSocket-события
-	event := hub.WebSocketEvent{
+	wsEvent := hub.WebSocketEvent{
 		Type: "task_updated",
 		Data: task,
 	}
-	if data, err := json.Marshal(event); err == nil {
+	if data, err := json.Marshal(wsEvent); err == nil {
 		h.hub.Broadcast(data)
 	}
 
 	c.JSON(http.StatusOK, task)
 }
 
-// Delete мягко удаляет задачу
+// Delete удаляет задачу и отправляет событие в Kafka
 func (h *TaskHandler) Delete(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -145,27 +156,28 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if h.analytics != nil {
-		h.analytics.SendEvent(analytics.Event{
-			TaskID:    id,
-			EventType: "deleted",
-			Status:    "", // можно оставить пустым
-			Assignee:  "",
-		})
+	if h.kafkaProducer != nil {
+		event := map[string]interface{}{
+			"task_id":    id.String(),
+			"event_type": "deleted",
+			"status":     "",
+			"assignee":   "",
+		}
+		_ = h.kafkaProducer.SendEvent(id.String(), event)
 	}
 
-	event := hub.WebSocketEvent{
+	wsEvent := hub.WebSocketEvent{
 		Type: "task_deleted",
 		Data: map[string]interface{}{"id": id},
 	}
-	if data, err := json.Marshal(event); err == nil {
+	if data, err := json.Marshal(wsEvent); err == nil {
 		h.hub.Broadcast(data)
 	}
 
 	c.Status(http.StatusNoContent)
 }
 
-// GetStats возвращает аналитику по задачам за последние 24 часа
+// GetStats – аналитика из ClickHouse
 func (h *TaskHandler) GetStats(c *gin.Context) {
 	if h.analytics == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "analytics not available"})

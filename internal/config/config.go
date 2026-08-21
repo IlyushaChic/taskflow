@@ -10,6 +10,7 @@ type Config struct {
 	ServerPort    string
 	RedisURL      string
 	ClickHouseDSN string
+	KafkaBrokers  string
 }
 
 func Load() Config {
@@ -19,6 +20,7 @@ func Load() Config {
 		ServerPort:    getEnv("SERVER_PORT", "8080"),
 		RedisURL:      getEnv("REDIS_URL", ""),
 		ClickHouseDSN: getEnv("CLICKHOUSE_DSN", "localhost:9000"),
+		KafkaBrokers:  getEnv("KAFKA_BROKERS", "localhost:9092"),
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -15,6 +16,7 @@ import (
 	"taskflow/internal/config"
 	"taskflow/internal/handlers"
 	"taskflow/internal/hub"
+	"taskflow/internal/kafka"
 	"taskflow/internal/repository"
 	"taskflow/internal/services"
 
@@ -82,7 +84,7 @@ func main() {
 		log.Println("TaskRepository without cache (fallback)")
 	}
 
-	// ClickHouse аналитика
+	// ClickHouse
 	var analyticsClient *analytics.ClickHouseAnalyticsClient
 	if cfg.ClickHouseDSN != "" {
 		ac, err := analytics.NewClickHouseAnalyticsClient(cfg.ClickHouseDSN)
@@ -96,6 +98,21 @@ func main() {
 		log.Println("CLICKHOUSE_DSN not set, analytics disabled")
 	}
 
+	// Kafka producer
+	var kafkaProducer *kafka.Producer
+	if cfg.KafkaBrokers != "" {
+		brokers := strings.Split(cfg.KafkaBrokers, ",")
+		producer, err := kafka.NewProducer(brokers, "task-events")
+		if err != nil {
+			log.Printf("Kafka producer initialization failed: %v", err)
+		} else {
+			kafkaProducer = producer
+			log.Println("Kafka producer connected")
+		}
+	} else {
+		log.Println("KAFKA_BROKERS not set, Kafka disabled")
+	}
+
 	// Сервис и хендлеры
 	taskService := services.NewTaskService(taskRepo)
 
@@ -104,9 +121,9 @@ func main() {
 	go wsHub.Run()
 	log.Println("WebSocket Hub started")
 
-	taskHandler := handlers.NewTaskHandler(taskService, wsHub, analyticsClient)
+	taskHandler := handlers.NewTaskHandler(taskService, wsHub, analyticsClient, kafkaProducer)
 
-	// Gin роутер
+	// Gin
 	r := gin.Default()
 
 	// CORS
@@ -119,16 +136,14 @@ func main() {
 	}))
 
 	// Sentry middleware
-	r.Use(sentrygin.New(sentrygin.Options{
-		Repanic: true,
-	}))
+	r.Use(sentrygin.New(sentrygin.Options{Repanic: true}))
 
-	// WebSocket endpoint
+	// WebSocket
 	r.GET("/ws", func(c *gin.Context) {
 		wsHub.ServeWS(c.Writer, c.Request)
 	})
 
-	// API роуты
+	// API routes
 	api := r.Group("/api/v1")
 	{
 		api.GET("/tasks", taskHandler.List)
@@ -136,7 +151,7 @@ func main() {
 		api.GET("/tasks/:id", taskHandler.Get)
 		api.PUT("/tasks/:id", taskHandler.Update)
 		api.DELETE("/tasks/:id", taskHandler.Delete)
-		api.GET("/stats", taskHandler.GetStats) // новый эндпоинт
+		api.GET("/stats", taskHandler.GetStats)
 	}
 
 	// Health check
@@ -144,12 +159,11 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// Запуск сервера
+	// Server
 	srv := &http.Server{
 		Addr:    ":" + cfg.ServerPort,
 		Handler: r,
 	}
-
 	go func() {
 		log.Printf("Server starting on port %s", cfg.ServerPort)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -162,7 +176,6 @@ func main() {
 	signal.Notify(quit, os.Interrupt)
 	<-quit
 	log.Println("Shutting down server...")
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
