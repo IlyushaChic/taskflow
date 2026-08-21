@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Table, Button, Modal, Form, Input, Select, DatePicker, Space, message } from 'antd';
 import { getTasks, createTask, updateTask, deleteTask } from './api/tasks';
 import { Task, CreateTaskData, UpdateTaskData, TaskFilter } from './types';
@@ -6,6 +6,7 @@ import * as Sentry from '@sentry/react';
 import dayjs from 'dayjs';
 
 const { Option } = Select;
+import { notification } from 'antd';
 
 const App: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -14,6 +15,8 @@ const App: React.FC = () => {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [form] = Form.useForm();
   const [filters, setFilters] = useState<TaskFilter>({ status: '', assignee: '' });
+  const wsRef = useRef<WebSocket | null>(null);
+
 
   const fetchTasks = async (params: TaskFilter = {}) => {
     setLoading(true);
@@ -31,6 +34,41 @@ const App: React.FC = () => {
   useEffect(() => {
     fetchTasks();
   }, [filters]);
+
+
+useEffect(() => {
+  const ws = new WebSocket('ws://localhost:8080/ws');
+  wsRef.current = ws;
+
+  ws.onopen = () => {
+    console.log('WebSocket connected');
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      // data: { type: 'task_created' | 'task_updated' | 'task_deleted', data: ... }
+      notification.info({
+        message: `Событие: ${data.type}`,
+        description: data.type === 'task_deleted' 
+          ? `Задача ${data.data.id} удалена` 
+          : `Задача "${data.data.title}" обновлена`,
+      });
+
+      fetchTasks();
+    } catch (err) {
+      console.error('WebSocket message error', err);
+    }
+  };
+
+  ws.onclose = () => {
+    console.log('WebSocket disconnected');
+  };
+
+  return () => {
+    ws.close();
+  };
+}, []);
 
   const handleCreate = () => {
     setEditingTask(null);

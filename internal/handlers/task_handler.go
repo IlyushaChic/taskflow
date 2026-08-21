@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
+
+	"taskflow/internal/hub"
 	"taskflow/internal/models"
 	"taskflow/internal/services"
 
@@ -11,12 +14,17 @@ import (
 
 type TaskHandler struct {
 	service *services.TaskService
+	hub     *hub.Hub
 }
 
-func NewTaskHandler(service *services.TaskService) *TaskHandler {
-	return &TaskHandler{service: service}
+func NewTaskHandler(service *services.TaskService, h *hub.Hub) *TaskHandler {
+	return &TaskHandler{
+		service: service,
+		hub:     h,
+	}
 }
 
+// Create создаёт новую задачу
 func (h *TaskHandler) Create(c *gin.Context) {
 	var req models.CreateTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -28,9 +36,19 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	event := hub.WebSocketEvent{
+		Type: "task_created",
+		Data: task,
+	}
+	if data, err := json.Marshal(event); err == nil {
+		h.hub.Broadcast(data)
+	}
+
 	c.JSON(http.StatusCreated, task)
 }
 
+// Get возвращает задачу по ID
 func (h *TaskHandler) Get(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -45,6 +63,7 @@ func (h *TaskHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, task)
 }
 
+// List возвращает список задач с фильтрацией и пагинацией
 func (h *TaskHandler) List(c *gin.Context) {
 	var filter models.TaskFilter
 	if err := c.ShouldBindQuery(&filter); err != nil {
@@ -59,6 +78,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": tasks, "total": total})
 }
 
+// Update обновляет задачу
 func (h *TaskHandler) Update(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -79,9 +99,20 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		}
 		return
 	}
+
+	// Отправка WebSocket-события
+	event := hub.WebSocketEvent{
+		Type: "task_updated",
+		Data: task,
+	}
+	if data, err := json.Marshal(event); err == nil {
+		h.hub.Broadcast(data)
+	}
+
 	c.JSON(http.StatusOK, task)
 }
 
+// Delete мягко удаляет задачу
 func (h *TaskHandler) Delete(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -92,5 +123,14 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	event := hub.WebSocketEvent{
+		Type: "task_deleted",
+		Data: map[string]interface{}{"id": id},
+	}
+	if data, err := json.Marshal(event); err == nil {
+		h.hub.Broadcast(data)
+	}
+
 	c.Status(http.StatusNoContent)
 }

@@ -13,6 +13,7 @@ import (
 	"taskflow/internal/cache"
 	"taskflow/internal/config"
 	"taskflow/internal/handlers"
+	"taskflow/internal/hub"
 	"taskflow/internal/repository"
 	"taskflow/internal/services"
 
@@ -78,9 +79,12 @@ func main() {
 		log.Println("TaskRepository without cache (fallback)")
 	}
 
+	wsHub := hub.NewHub()
+	go wsHub.Run()
+
 	// Сервис и хендлеры
 	taskService := services.NewTaskService(taskRepo)
-	taskHandler := handlers.NewTaskHandler(taskService)
+	taskHandler := handlers.NewTaskHandler(taskService, wsHub)
 
 	// Настройка роутера Gin
 	r := gin.Default()
@@ -112,6 +116,10 @@ func main() {
 	// Health check
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	r.GET("/ws", func(c *gin.Context) {
+		wsHub.ServeWS(c.Writer, c.Request)
 	})
 
 	// Запуск сервера
