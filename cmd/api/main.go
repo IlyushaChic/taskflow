@@ -10,6 +10,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"taskflow/internal/analytics"
 	"taskflow/internal/cache"
 	"taskflow/internal/config"
 	"taskflow/internal/handlers"
@@ -25,11 +26,13 @@ import (
 )
 
 func main() {
+	// Загрузка .env
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using system env")
 	}
 	cfg := config.Load()
 
+	// Sentry
 	if cfg.SentryDSN != "" {
 		if err := sentry.Init(sentry.ClientOptions{
 			Dsn: cfg.SentryDSN,
@@ -41,7 +44,7 @@ func main() {
 		defer sentry.Flush(2 * time.Second)
 	}
 
-	// Подключение к PostgreSQL
+	// PostgreSQL
 	pool, err := pgxpool.New(context.Background(), cfg.DBURL)
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v", err)
@@ -49,7 +52,7 @@ func main() {
 	defer pool.Close()
 	log.Println("PostgreSQL connected")
 
-	// Подключение к Redis
+	// Redis
 	var redisCache cache.Cache
 	if cfg.RedisURL != "" {
 		rc, err := cache.NewRedisCache(cfg.RedisURL)
@@ -63,13 +66,13 @@ func main() {
 		log.Println("REDIS_URL not set, caching disabled")
 	}
 
-	// Создаём outbox репозиторий
+	// Outbox репозиторий
 	outboxRepo := repository.NewOutboxRepository(pool)
 
-	// Создаём базовый репозиторий с outbox
+	// Базовый репозиторий с outbox
 	baseRepo := repository.NewTaskRepository(pool, outboxRepo)
 
-	// Оборачиваем в кеш, если Redis доступен
+	// Декоратор кеша
 	var taskRepo repository.TaskRepository
 	if redisCache != nil {
 		taskRepo = repository.NewTaskRepositoryCache(baseRepo, redisCache)
@@ -79,17 +82,34 @@ func main() {
 		log.Println("TaskRepository without cache (fallback)")
 	}
 
-	wsHub := hub.NewHub()
-	go wsHub.Run()
+	// ClickHouse аналитика
+	var analyticsClient *analytics.ClickHouseAnalyticsClient
+	if cfg.ClickHouseDSN != "" {
+		ac, err := analytics.NewClickHouseAnalyticsClient(cfg.ClickHouseDSN)
+		if err != nil {
+			log.Printf("ClickHouse initialization failed: %v, analytics disabled", err)
+		} else {
+			analyticsClient = ac
+			log.Println("ClickHouse connected, analytics enabled")
+		}
+	} else {
+		log.Println("CLICKHOUSE_DSN not set, analytics disabled")
+	}
 
 	// Сервис и хендлеры
 	taskService := services.NewTaskService(taskRepo)
-	taskHandler := handlers.NewTaskHandler(taskService, wsHub)
 
-	// Настройка роутера Gin
+	// WebSocket Hub
+	wsHub := hub.NewHub()
+	go wsHub.Run()
+	log.Println("WebSocket Hub started")
+
+	taskHandler := handlers.NewTaskHandler(taskService, wsHub, analyticsClient)
+
+	// Gin роутер
 	r := gin.Default()
 
-	// CORS middleware
+	// CORS
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -98,12 +118,17 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	// Sentry middleware (ловит паники и отправляет в Sentry)
+	// Sentry middleware
 	r.Use(sentrygin.New(sentrygin.Options{
 		Repanic: true,
 	}))
 
-	// Роуты API
+	// WebSocket endpoint
+	r.GET("/ws", func(c *gin.Context) {
+		wsHub.ServeWS(c.Writer, c.Request)
+	})
+
+	// API роуты
 	api := r.Group("/api/v1")
 	{
 		api.GET("/tasks", taskHandler.List)
@@ -111,15 +136,12 @@ func main() {
 		api.GET("/tasks/:id", taskHandler.Get)
 		api.PUT("/tasks/:id", taskHandler.Update)
 		api.DELETE("/tasks/:id", taskHandler.Delete)
+		api.GET("/stats", taskHandler.GetStats) // новый эндпоинт
 	}
 
 	// Health check
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
-
-	r.GET("/ws", func(c *gin.Context) {
-		wsHub.ServeWS(c.Writer, c.Request)
 	})
 
 	// Запуск сервера

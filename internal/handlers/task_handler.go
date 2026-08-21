@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"taskflow/internal/analytics"
 	"taskflow/internal/hub"
 	"taskflow/internal/models"
 	"taskflow/internal/services"
@@ -13,14 +14,16 @@ import (
 )
 
 type TaskHandler struct {
-	service *services.TaskService
-	hub     *hub.Hub
+	service   *services.TaskService
+	hub       *hub.Hub
+	analytics *analytics.ClickHouseAnalyticsClient
 }
 
-func NewTaskHandler(service *services.TaskService, h *hub.Hub) *TaskHandler {
+func NewTaskHandler(service *services.TaskService, h *hub.Hub, analytics *analytics.ClickHouseAnalyticsClient) *TaskHandler {
 	return &TaskHandler{
-		service: service,
-		hub:     h,
+		service:   service,
+		hub:       h,
+		analytics: analytics,
 	}
 }
 
@@ -35,6 +38,15 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	if h.analytics != nil {
+		h.analytics.SendEvent(analytics.Event{
+			TaskID:    task.ID,
+			EventType: "created",
+			Status:    task.Status,
+			Assignee:  task.Assignee,
+		})
 	}
 
 	event := hub.WebSocketEvent{
@@ -100,6 +112,15 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		return
 	}
 
+	if h.analytics != nil {
+		h.analytics.SendEvent(analytics.Event{
+			TaskID:    task.ID,
+			EventType: "updated",
+			Status:    task.Status,
+			Assignee:  task.Assignee,
+		})
+	}
+
 	// Отправка WebSocket-события
 	event := hub.WebSocketEvent{
 		Type: "task_updated",
@@ -124,6 +145,15 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	if h.analytics != nil {
+		h.analytics.SendEvent(analytics.Event{
+			TaskID:    id,
+			EventType: "deleted",
+			Status:    "", // можно оставить пустым
+			Assignee:  "",
+		})
+	}
+
 	event := hub.WebSocketEvent{
 		Type: "task_deleted",
 		Data: map[string]interface{}{"id": id},
@@ -133,4 +163,18 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// GetStats возвращает аналитику по задачам за последние 24 часа
+func (h *TaskHandler) GetStats(c *gin.Context) {
+	if h.analytics == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "analytics not available"})
+		return
+	}
+	stats, err := h.analytics.GetStats(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, stats)
 }

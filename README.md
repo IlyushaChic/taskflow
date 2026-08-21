@@ -9,7 +9,7 @@
 - **Задача**: `id`, `title`, `description`, `status` (`new`, `in_progress`, `done`, `cancelled`), `assignee`, `due_date`, `version` (оптимистичная блокировка), `created_at`, `updated_at`, `deleted_at` (soft delete).
 - **История изменений**: `id`, `task_id`, `field_name`, `old_value`, `new_value`, `changed_at`.
 - **Outbox**: `id`, `aggregate_id`, `event_type`, `payload`, `created_at`, `processed_at`. Используется для надёжной публикации событий в брокер.
-- **Аналитика** (ClickHouse, позже): денормализованные данные для быстрых агрегатов.
+- **Аналитика** (ClickHouse): таблица `task_analytics` для хранения исторических событий и построения агрегатов.
 
 **Фронтенд:** React + Vite + Ant Design (UI Kit), подключение через WebSocket к real-time событиям.
 
@@ -87,7 +87,25 @@
 
 ---
 
-## 🚀 Запуск проекта (шаги 0–3)
+### 📌 Шаг 4 – ClickHouse (аналитика)
+
+**Что сделано:**
+- Создана таблица `task_analytics` в ClickHouse (движок MergeTree) с полями: `task_id`, `event_type` (created/updated/deleted), `status`, `assignee`, `timestamp`.
+- При каждом изменении задачи (создание, обновление, удаление) событие асинхронно записывается в ClickHouse с использованием Batch Insert (пакеты по 100 событий или каждые 5 секунд).
+- Добавлен эндпоинт `GET /api/v1/stats`, возвращающий количество задач по статусам за последние 24 часа (запрос к ClickHouse).
+
+**Как проверить:**
+1. Запустить ClickHouse (Docker), создать таблицу `task_analytics`.
+2. Выполнить несколько изменений задач через API/UI.
+3. Подождать несколько секунд (воркер сбрасывает батч каждые 5 секунд).
+4. Вызвать `GET /api/v1/stats` – увидеть агрегаты (например, `{"new": 4, "in_progress": 1}`).
+5. В ClickHouse CLI выполнить `SELECT * FROM task_analytics` для проверки данных.
+
+**Коммит:** `feat(step4): add ClickHouse for analytics`
+
+---
+
+## 🚀 Запуск проекта (шаги 0–4)
 
 ### 1️⃣ Переменные окружения
 
@@ -98,3 +116,4 @@ DB_URL=postgres://postgres:postgres@localhost:5433/taskflow?sslmode=disable
 SERVER_PORT=8080
 SENTRY_DSN=https://your-dsn@sentry.io/your-project
 REDIS_URL=redis://localhost:6379/0
+CLICKHOUSE_DSN=localhost:9000
