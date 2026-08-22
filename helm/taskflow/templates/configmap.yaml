@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "taskflow.fullname" . }}-config
+  labels:
+    {{- include "taskflow.labels" . | nindent 4 }}
+data:
+  DB_URL: {{ .Values.env.DB_URL | quote }}
+  REDIS_URL: {{ .Values.env.REDIS_URL | quote }}
+  CLICKHOUSE_DSN: {{ .Values.env.CLICKHOUSE_DSN | quote }}
+  KAFKA_BROKERS: {{ .Values.env.KAFKA_BROKERS | quote }}
+  SERVER_PORT: {{ .Values.env.SERVER_PORT | quote }}

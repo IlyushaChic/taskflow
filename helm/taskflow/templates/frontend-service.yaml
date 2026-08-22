@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "taskflow.fullname" . }}-frontend
+  labels:
+    {{- include "taskflow.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.serviceType }}
+  ports:
+    - port: {{ .Values.frontend.port }}
+      targetPort: {{ .Values.frontend.port }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "taskflow.selectorLabels" . | nindent 4 }}
+    app: frontend

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  labels:
+    {{- include "taskflow.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9000
+      targetPort: 9000
+      protocol: TCP
+  selector:
+    {{- include "taskflow.selectorLabels" . | nindent 4 }}
+    app: clickhouse

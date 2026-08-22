@@ -1,0 +1,84 @@
+# Общие настройки
+namespace: taskflow
+
+# Реплики
+replicaCount: 1
+
+# Образы
+imageRegistry: ""
+backendImage: taskflow-backend
+frontendImage: taskflow-frontend
+rabbitWorkerImage: taskflow-rabbit-worker
+kafkaWorkerImage: taskflow-kafka-worker
+imageTag: latest
+pullPolicy: IfNotPresent
+
+# Переменные окружения
+env:
+  DB_URL: postgres://postgres:postgres@postgres:5432/taskflow?sslmode=disable
+  REDIS_URL: redis://redis:6379/0
+  CLICKHOUSE_DSN: clickhouse:9000
+  KAFKA_BROKERS: kafka:9092
+  SERVER_PORT: 8080
+
+# PostgreSQL
+postgres:
+  image: postgres:15-alpine
+  username: postgres
+  password: postgres
+  database: taskflow
+  storage: 1Gi
+
+# Redis
+redis:
+  image: redis:7-alpine
+
+# RabbitMQ
+rabbitmq:
+  image: rabbitmq:3-management-alpine
+  username: guest
+  password: guest
+
+# ClickHouse
+clickhouse:
+  image: clickhouse/clickhouse-server:latest
+  storage: 1Gi
+
+# Kafka
+frontend:
+  replicas: 1
+  port: 80
+
+backend:
+  replicas: 1
+  port: 8080
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+frontend:
+  replicas: 1
+  port: 80
+
+postgres:
+  image: postgres:15-alpine
+  username: postgres
+  password: postgres
+  database: taskflow
+  storage: 1Gi
+
+redis:
+  image: redis:7-alpine
+
+rabbitmq:
+  image: rabbitmq:3-management-alpine
+  username: guest
+  password: guest
+
+clickhouse:
+  image: clickhouse/clickhouse-server:latest
+  storage: 1Gi
