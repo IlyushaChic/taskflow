@@ -79,6 +79,39 @@ services:
     networks:
       - taskflow-net
 
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: taskflow-jaeger
+    ports:
+      - "16686:16686"   # UI
+      - "14268:14268"   # коллектор
+    environment:
+      COLLECTOR_OTLP_ENABLED: true
+    networks:
+      - taskflow-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: taskflow-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - taskflow-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: taskflow-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3001:3000"
+    networks:
+      - taskflow-net
+
   backend:
     build:
       context: .
@@ -103,6 +136,7 @@ services:
       CLICKHOUSE_DSN: clickhouse:9000
       KAFKA_BROKERS: kafka:9092
       SERVER_PORT: 8080
+      JAEGER_ENDPOINT: http://jaeger:14268/api/traces
     ports:
       - "8080:8080"
     networks:

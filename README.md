@@ -150,12 +150,42 @@
 
 ---
 
+### 📌 Шаг 9 – Prometheus + Grafana + Jaeger (observability)
+
+**Что сделано:**
+- Внедрён OpenTelemetry в бэкенд:
+  - TracerProvider с экспортером в Jaeger.
+  - Middleware `otelgin` для автоматической трассировки HTTP-запросов.
+  - Кастомные спаны для запросов к БД, Redis, RabbitMQ/Kafka.
+- Добавлен эндпоинт `/metrics` для сбора метрик Prometheus.
+- В `docker-compose.yml` добавлены сервисы:
+  - **Jaeger** – сбор и визуализация трейсов (порт 16686).
+  - **Prometheus** – сбор метрик (порт 9090).
+  - **Grafana** – визуализация метрик и трейсов (порт 3001, логин admin/admin).
+- Настроены источники данных для Grafana (Prometheus и Jaeger) через provisioning.
+- В Helm-чарт также добавлены деплойменты и сервисы для Jaeger, Prometheus, Grafana.
+
+**Как проверить:**
+- Запустить стек через `docker-compose up -d`.
+- Отправить несколько запросов к API (например, создать задачу).
+- Зайти в Jaeger UI: http://localhost:16686 – выбрать сервис `taskflow-api` и увидеть трейсы с вложенными спанами.
+- Зайти в Grafana: http://localhost:3001 (admin/admin) – в разделе Explore можно построить графики по метрикам из Prometheus.
+- Зайти в Prometheus: http://localhost:9090 – выполнить запрос `http_requests_total` и увидеть данные.
+- Проверить эндпоинт `/metrics`: `curl http://localhost:8080/metrics` – должен вернуть метрики в формате Prometheus.
+
+**Коммит:** `feat(step9): add Prometheus, Grafana, Jaeger with OpenTelemetry`
+
+---
+
 ## 🚀 Запуск проекта (локально, в Docker и в Kubernetes)
 
-### 🐳 Запуск через Docker Compose
+### 🐳 Запуск через Docker Compose (с Observability)
 
 1. Убедись, что Docker и Docker Compose установлены.
-2. В корне проекта выполни:
+2. Создай файлы конфигурации (если ещё нет):
+   - `prometheus.yml` – конфиг для Prometheus.
+   - `grafana/provisioning/datasources/prometheus.yaml` и `jaeger.yaml` – для автоматического добавления источников данных в Grafana.
+3. В корне проекта выполни:
 
 ```bash
 docker-compose up -d

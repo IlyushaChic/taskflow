@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type TaskRepository interface {
@@ -26,7 +28,6 @@ type taskRepo struct {
 	outboxRepo OutboxRepository
 }
 
-// NewTaskRepository теперь принимает OutboxRepository
 func NewTaskRepository(pool *pgxpool.Pool, outboxRepo OutboxRepository) TaskRepository {
 	return &taskRepo{
 		pool:       pool,
@@ -34,8 +35,12 @@ func NewTaskRepository(pool *pgxpool.Pool, outboxRepo OutboxRepository) TaskRepo
 	}
 }
 
-// Create – вставка задачи + outbox-событие в одной транзакции
+// Create – вставка задачи + outbox в транзакции
 func (r *taskRepo) Create(ctx context.Context, task *models.Task) error {
+	ctx, span := otel.Tracer("taskflow").Start(ctx, "repository.Create")
+	defer span.End()
+	span.SetAttributes(attribute.String("task.id", task.ID.String()))
+
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -49,7 +54,7 @@ func (r *taskRepo) Create(ctx context.Context, task *models.Task) error {
 		return err
 	}
 
-	// Outbox-событие о создании
+	// Outbox для события создания
 	payload, _ := json.Marshal(map[string]interface{}{
 		"task_id": task.ID,
 		"title":   task.Title,
@@ -67,8 +72,12 @@ func (r *taskRepo) Create(ctx context.Context, task *models.Task) error {
 	return tx.Commit(ctx)
 }
 
-// GetByID – без изменений (только чтение)
+// GetByID – получение задачи с трассировкой
 func (r *taskRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Task, error) {
+	ctx, span := otel.Tracer("taskflow").Start(ctx, "repository.GetByID")
+	defer span.End()
+	span.SetAttributes(attribute.String("task.id", id.String()))
+
 	query := `SELECT id, title, description, status, assignee, due_date, version, created_at, updated_at, deleted_at
               FROM tasks WHERE id = $1 AND deleted_at IS NULL`
 	task := &models.Task{}
@@ -82,8 +91,16 @@ func (r *taskRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Task, err
 	return task, nil
 }
 
-// List – без изменений (только чтение)
+// List – фильтрация + пагинация с трассировкой
 func (r *taskRepo) List(ctx context.Context, filter models.TaskFilter) ([]models.Task, int, error) {
+	ctx, span := otel.Tracer("taskflow").Start(ctx, "repository.List")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("filter.status", filter.Status),
+		attribute.Int("filter.limit", filter.Limit),
+		attribute.Int("filter.offset", filter.Offset),
+	)
+
 	conditions := []string{"deleted_at IS NULL"}
 	args := []interface{}{}
 	argPos := 1
@@ -146,8 +163,12 @@ func (r *taskRepo) List(ctx context.Context, filter models.TaskFilter) ([]models
 	return tasks, total, nil
 }
 
-// Update – обновление задачи + история + outbox в одной транзакции
+// Update – обновление задачи, история + outbox в транзакции
 func (r *taskRepo) Update(ctx context.Context, task *models.Task, history []models.TaskHistory) error {
+	ctx, span := otel.Tracer("taskflow").Start(ctx, "repository.Update")
+	defer span.End()
+	span.SetAttributes(attribute.String("task.id", task.ID.String()))
+
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -178,7 +199,7 @@ func (r *taskRepo) Update(ctx context.Context, task *models.Task, history []mode
 		}
 	}
 
-	// Outbox-событие об обновлении
+	// Outbox для события обновления
 	payload, _ := json.Marshal(map[string]interface{}{
 		"task_id":    task.ID,
 		"new_status": task.Status,
@@ -195,8 +216,12 @@ func (r *taskRepo) Update(ctx context.Context, task *models.Task, history []mode
 	return tx.Commit(ctx)
 }
 
-// Delete – soft delete + outbox в транзакции
+// Delete – мягкое удаление + outbox в транзакции
 func (r *taskRepo) Delete(ctx context.Context, id uuid.UUID) error {
+	ctx, span := otel.Tracer("taskflow").Start(ctx, "repository.Delete")
+	defer span.End()
+	span.SetAttributes(attribute.String("task.id", id.String()))
+
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -212,7 +237,7 @@ func (r *taskRepo) Delete(ctx context.Context, id uuid.UUID) error {
 		return pgx.ErrNoRows
 	}
 
-	// Outbox-событие об удалении
+	// Outbox для события удаления
 	payload, _ := json.Marshal(map[string]interface{}{
 		"task_id": id,
 	})

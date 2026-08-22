@@ -9,7 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"taskflow/internal/analytics"
 	"taskflow/internal/cache"
@@ -17,20 +23,43 @@ import (
 	"taskflow/internal/handlers"
 	"taskflow/internal/hub"
 	"taskflow/internal/kafka"
+	"taskflow/internal/observability"
 	"taskflow/internal/repository"
 	"taskflow/internal/services"
 
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func main() {
-	// Загрузка .env
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using system env")
 	}
 	cfg := config.Load()
+
+	// --- Observability ---
+	// Tracer (Jaeger)
+	var tracerProvider *sdktrace.TracerProvider
+	if cfg.JaegerEndpoint != "" {
+		tp, err := observability.InitTracer("taskflow-api", cfg.JaegerEndpoint)
+		if err != nil {
+			log.Printf("Jaeger initialization failed: %v", err)
+		} else {
+			tracerProvider = tp
+			defer func() {
+				if err := tracerProvider.Shutdown(context.Background()); err != nil {
+					log.Printf("Tracer shutdown error: %v", err)
+				}
+			}()
+			log.Println("Jaeger tracer initialized")
+		}
+	}
+
+	// Metrics (Prometheus)
+	if _, err := observability.InitMetrics(); err != nil {
+		log.Printf("Prometheus metrics initialization failed: %v", err)
+	} else {
+		log.Println("Prometheus metrics exporter initialized")
+	}
 
 	// PostgreSQL
 	pool, err := pgxpool.New(context.Background(), cfg.DBURL)
@@ -54,34 +83,26 @@ func main() {
 		log.Println("REDIS_URL not set, caching disabled")
 	}
 
-	// Outbox репозиторий
+	// Outbox, репозитории
 	outboxRepo := repository.NewOutboxRepository(pool)
-
-	// Базовый репозиторий с outbox
 	baseRepo := repository.NewTaskRepository(pool, outboxRepo)
-
-	// Декоратор кеша
 	var taskRepo repository.TaskRepository
 	if redisCache != nil {
 		taskRepo = repository.NewTaskRepositoryCache(baseRepo, redisCache)
-		log.Println("TaskRepository with cache decorator created")
 	} else {
 		taskRepo = baseRepo
-		log.Println("TaskRepository without cache (fallback)")
 	}
 
-	// ClickHouse
+	// ClickHouse (опционально)
 	var analyticsClient *analytics.ClickHouseAnalyticsClient
 	if cfg.ClickHouseDSN != "" {
 		ac, err := analytics.NewClickHouseAnalyticsClient(cfg.ClickHouseDSN)
 		if err != nil {
-			log.Printf("ClickHouse initialization failed: %v, analytics disabled", err)
+			log.Printf("ClickHouse initialization failed: %v", err)
 		} else {
 			analyticsClient = ac
-			log.Println("ClickHouse connected, analytics enabled")
+			log.Println("ClickHouse connected")
 		}
-	} else {
-		log.Println("CLICKHOUSE_DSN not set, analytics disabled")
 	}
 
 	// Kafka producer
@@ -95,38 +116,27 @@ func main() {
 			kafkaProducer = producer
 			log.Println("Kafka producer connected")
 		}
-	} else {
-		log.Println("KAFKA_BROKERS not set, Kafka disabled")
 	}
 
-	// Сервис и хендлеры
+	// Сервисы
 	taskService := services.NewTaskService(taskRepo)
-
-	// WebSocket Hub
 	wsHub := hub.NewHub()
 	go wsHub.Run()
-	log.Println("WebSocket Hub started")
-
 	taskHandler := handlers.NewTaskHandler(taskService, wsHub, analyticsClient, kafkaProducer)
 
-	// Gin
+	// Gin роутер
 	r := gin.Default()
+	r.Use(cors.Default())
 
-	// CORS
-	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000", "http://localhost:5173"},
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
-	}))
+	// OpenTelemetry middleware (трассировка HTTP)
+	r.Use(otelgin.Middleware("taskflow-api"))
 
 	// WebSocket
 	r.GET("/ws", func(c *gin.Context) {
 		wsHub.ServeWS(c.Writer, c.Request)
 	})
 
-	// API routes
+	// API
 	api := r.Group("/api/v1")
 	{
 		api.GET("/tasks", taskHandler.List)
@@ -142,6 +152,9 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	// Prometheus metrics endpoint
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
 	// Server
 	srv := &http.Server{
 		Addr:    ":" + cfg.ServerPort,
@@ -154,7 +167,6 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt)
 	<-quit
