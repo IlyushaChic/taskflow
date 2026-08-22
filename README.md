@@ -22,7 +22,7 @@
 
 ---
 
-### 📌 Шаг 0 – Базовое CRUD + Sentry + React/AntD
+### 📌 Шаг 0 – Базовое CRUD + React/AntD
 
 **Что сделано:**
 1. REST API на Go (Gin) с полным CRUD для задач.
@@ -30,9 +30,8 @@
 3. Транзакции: при обновлении задачи изменяется `version` (оптимистичная блокировка) и пишется история в `task_history` в одной транзакции.
 4. Мягкое удаление (`deleted_at`).
 5. Фронтенд на React + Vite + Ant Design (таблица, фильтры, модальные формы).
-6. Sentry подключён к бэкенду и фронтенду.
 
-**Коммит:** `feat(step0): init project with CRUD, migrations, transactions, Sentry, React+AntD`
+**Коммит:** `feat(step0): init project with CRUD, migrations, transactions, React+AntD`
 
 ---
 
@@ -107,16 +106,36 @@
 
 ---
 
-## 🚀 Запуск проекта (шаги 0–5)
+### 📌 Шаг 6 – Temporal (долгие процессы) (в разработке)
 
-### 1️⃣ Переменные окружения
+**Статус:** В процессе настройки. Инфраструктура Temporal требует отдельной конфигурации, поэтому реализация отложена до завершения основных фич.
 
-Создай файл `.env` в корне проекта и пропиши:
+---
 
-```env
-DB_URL=postgres://postgres:postgres@localhost:5433/taskflow?sslmode=disable
-SERVER_PORT=8080
-SENTRY_DSN=https://your-dsn@sentry.io/your-project
-REDIS_URL=redis://localhost:6379/0
-CLICKHOUSE_DSN=localhost:9000
-KAFKA_BROKERS=localhost:9092
+### 📌 Шаг 7 – Docker-контейнеризация
+
+**Что сделано:**
+- Multi-stage Dockerfile для бэкенда и воркеров.
+- Dockerfile для фронтенда (сборка через Vite, раздача через nginx).
+- `docker-compose.yml` с PostgreSQL, Redis, RabbitMQ, ClickHouse, Kafka+Zookeeper, бэкендом, воркерами и фронтендом.
+- Автоматический накат миграций при старте через отдельный сервис `migrate`.
+- Все сервисы запускаются одной командой.
+
+**Как проверить:**
+- Выполнить `docker-compose up -d`.
+- Открыть `http://localhost:3000` – фронт.
+- Проверить API: `curl http://localhost:8080/health`.
+
+**Коммит:** `feat(step7): dockerize all services with compose`
+
+---
+
+## 🚀 Запуск проекта (локально и в Docker)
+
+### 🐳 Запуск через Docker Compose (рекомендуется)
+
+1. Убедись, что Docker и Docker Compose установлены.
+2. В корне проекта выполни:
+
+```bash
+docker-compose up -d

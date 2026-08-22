@@ -4,8 +4,6 @@ go 1.26.3
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.48.0
-	github.com/getsentry/sentry-go v0.48.0
-	github.com/getsentry/sentry-go/gin v0.48.0
 	github.com/gin-contrib/cors v1.7.7
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0

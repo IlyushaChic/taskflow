@@ -20,8 +20,6 @@ import (
 	"taskflow/internal/repository"
 	"taskflow/internal/services"
 
-	"github.com/getsentry/sentry-go"
-	sentrygin "github.com/getsentry/sentry-go/gin"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,18 +31,6 @@ func main() {
 		log.Println("No .env file found, using system env")
 	}
 	cfg := config.Load()
-
-	// Sentry
-	if cfg.SentryDSN != "" {
-		if err := sentry.Init(sentry.ClientOptions{
-			Dsn: cfg.SentryDSN,
-		}); err != nil {
-			log.Printf("Sentry initialization failed: %v", err)
-		} else {
-			log.Println("Sentry initialized")
-		}
-		defer sentry.Flush(2 * time.Second)
-	}
 
 	// PostgreSQL
 	pool, err := pgxpool.New(context.Background(), cfg.DBURL)
@@ -128,15 +114,12 @@ func main() {
 
 	// CORS
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173"},
+		AllowOrigins:     []string{"http://localhost:3000", "http://localhost:5173"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 	}))
-
-	// Sentry middleware
-	r.Use(sentrygin.New(sentrygin.Options{Repanic: true}))
 
 	// WebSocket
 	r.GET("/ws", func(c *gin.Context) {

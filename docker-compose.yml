@@ -1,0 +1,172 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: taskflow-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: taskflow
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - taskflow-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: taskflow-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - taskflow-net
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: taskflow-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - taskflow-net
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: taskflow-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_DEFAULT_PASSWORD: ""
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    networks:
+      - taskflow-net
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: taskflow-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+    networks:
+      - taskflow-net
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: taskflow-kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_PROCESS_ROLES: broker
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+    ports:
+      - "9092:9092"
+    networks:
+      - taskflow-net
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: api
+    container_name: taskflow-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+      clickhouse:
+        condition: service_started
+      kafka:
+        condition: service_started
+    environment:
+      DB_URL: postgres://postgres:postgres@postgres:5432/taskflow?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      CLICKHOUSE_DSN: clickhouse:9000
+      KAFKA_BROKERS: kafka:9092
+      SERVER_PORT: 8080
+    ports:
+      - "8080:8080"
+    networks:
+      - taskflow-net
+
+  rabbit-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: workers/rabbit-consumer
+    container_name: taskflow-rabbit-worker
+    depends_on:
+      - postgres
+      - rabbitmq
+    environment:
+      DB_URL: postgres://postgres:postgres@postgres:5432/taskflow?sslmode=disable
+    networks:
+      - taskflow-net
+
+  kafka-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: workers/kafka-consumer
+    container_name: taskflow-kafka-worker
+    depends_on:
+      - postgres
+      - kafka
+      - clickhouse
+    environment:
+      DB_URL: postgres://postgres:postgres@postgres:5432/taskflow?sslmode=disable
+      CLICKHOUSE_DSN: clickhouse:9000
+    networks:
+      - taskflow-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: taskflow-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    networks:
+      - taskflow-net
+
+  migrate:
+    image: migrate/migrate:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: -path /migrations -database postgres://postgres:postgres@postgres:5432/taskflow?sslmode=disable up
+    volumes:
+      - ./migrations:/migrations
+    networks:
+      - taskflow-net
+
+networks:
+  taskflow-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  clickhouse_data:

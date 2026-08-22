@@ -6,7 +6,6 @@ import (
 
 type Config struct {
 	DBURL         string
-	SentryDSN     string
 	ServerPort    string
 	RedisURL      string
 	ClickHouseDSN string
@@ -16,7 +15,6 @@ type Config struct {
 func Load() Config {
 	return Config{
 		DBURL:         getEnv("DB_URL", "postgres://postgres:postgres@localhost:5432/taskflow?sslmode=disable"),
-		SentryDSN:     getEnv("SENTRY_DSN", ""),
 		ServerPort:    getEnv("SERVER_PORT", "8080"),
 		RedisURL:      getEnv("REDIS_URL", ""),
 		ClickHouseDSN: getEnv("CLICKHOUSE_DSN", "localhost:9000"),

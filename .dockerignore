@@ -1,0 +1,11 @@
+frontend/node_modules/
+frontend/dist/
+.git/
+*.log
+*.tmp
+*.md
+docs/
+.env
+*.swp
+*.swo
+node_modules/

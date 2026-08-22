@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Table, Button, Modal, Form, Input, Select, DatePicker, Space, message } from 'antd';
 import { getTasks, createTask, updateTask, deleteTask } from './api/tasks';
 import { Task, CreateTaskData, UpdateTaskData, TaskFilter } from './types';
-import * as Sentry from '@sentry/react';
 import dayjs from 'dayjs';
 
 const { Option } = Select;
@@ -25,7 +24,6 @@ const App: React.FC = () => {
       setTasks(res.data.data);
     } catch (error) {
       message.error('Не удалось загрузить задачи');
-      Sentry.captureException(error);
     } finally {
       setLoading(false);
     }
@@ -204,4 +202,5 @@ useEffect(() => {
   );
 };
 
-export default Sentry.withProfiler(App);
+export default App;
+
