@@ -7,9 +7,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/google/uuid"
 	"taskflow/internal/cache"
 	"taskflow/internal/models"
+
+	"github.com/google/uuid"
 )
 
 // TaskRepositoryCache декорирует TaskRepository и добавляет кеширование
@@ -33,7 +34,6 @@ func NewTaskRepositoryCache(repo TaskRepository, c cache.Cache) *TaskRepositoryC
 func (r *TaskRepositoryCache) Create(ctx context.Context, task *models.Task) error {
 	err := r.repo.Create(ctx, task)
 	if err == nil {
-		// инвалидируем кеш списка
 		_ = r.cache.DeletePattern(ctx, "tasks:list:*")
 		log.Println("cache: invalidated list keys after Create")
 	}
@@ -42,7 +42,6 @@ func (r *TaskRepositoryCache) Create(ctx context.Context, task *models.Task) err
 
 func (r *TaskRepositoryCache) GetByID(ctx context.Context, id uuid.UUID) (*models.Task, error) {
 	key := fmt.Sprintf("task:%s", id.String())
-	// пытаемся взять из кеша
 	data, err := r.cache.Get(ctx, key)
 	if err == nil && data != nil {
 		var task models.Task
@@ -52,12 +51,10 @@ func (r *TaskRepositoryCache) GetByID(ctx context.Context, id uuid.UUID) (*model
 		}
 	}
 	log.Println("cache: miss for task", id)
-	// miss – идём в БД
 	task, err := r.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	// сохраняем в кеш
 	if b, err := json.Marshal(task); err == nil {
 		_ = r.cache.Set(ctx, key, b, r.itemTTL)
 	}
@@ -65,7 +62,6 @@ func (r *TaskRepositoryCache) GetByID(ctx context.Context, id uuid.UUID) (*model
 }
 
 func (r *TaskRepositoryCache) List(ctx context.Context, filter models.TaskFilter) ([]models.Task, int, error) {
-	// формируем ключ на основе фильтра
 	filterBytes, _ := json.Marshal(filter)
 	key := fmt.Sprintf("tasks:list:%s", string(filterBytes))
 	data, err := r.cache.Get(ctx, key)
@@ -80,12 +76,10 @@ func (r *TaskRepositoryCache) List(ctx context.Context, filter models.TaskFilter
 		}
 	}
 	log.Println("cache: miss for list", key)
-	// miss – запрос к БД
 	tasks, total, err := r.repo.List(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
-	// сохраняем в кеш
 	result := struct {
 		Tasks []models.Task `json:"tasks"`
 		Total int           `json:"total"`
@@ -99,7 +93,6 @@ func (r *TaskRepositoryCache) List(ctx context.Context, filter models.TaskFilter
 func (r *TaskRepositoryCache) Update(ctx context.Context, task *models.Task, history []models.TaskHistory) error {
 	err := r.repo.Update(ctx, task, history)
 	if err == nil {
-		// инвалидируем кеш конкретной задачи и списка
 		_ = r.cache.Delete(ctx, fmt.Sprintf("task:%s", task.ID.String()))
 		_ = r.cache.DeletePattern(ctx, "tasks:list:*")
 		log.Println("cache: invalidated task and list keys after Update")

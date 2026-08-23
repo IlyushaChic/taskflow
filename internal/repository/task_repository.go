@@ -11,8 +11,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 )
 
 type TaskRepository interface {
@@ -37,15 +35,11 @@ func NewTaskRepository(pool *pgxpool.Pool, outboxRepo OutboxRepository) TaskRepo
 
 // Create – вставка задачи + outbox в транзакции
 func (r *taskRepo) Create(ctx context.Context, task *models.Task) error {
-	ctx, span := otel.Tracer("taskflow").Start(ctx, "repository.Create")
-	defer span.End()
-	span.SetAttributes(attribute.String("task.id", task.ID.String()))
-
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	query := `INSERT INTO tasks (id, title, description, status, assignee, due_date, version, created_at, updated_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
@@ -72,12 +66,8 @@ func (r *taskRepo) Create(ctx context.Context, task *models.Task) error {
 	return tx.Commit(ctx)
 }
 
-// GetByID – получение задачи с трассировкой
+// GetByID – получение задачи
 func (r *taskRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Task, error) {
-	ctx, span := otel.Tracer("taskflow").Start(ctx, "repository.GetByID")
-	defer span.End()
-	span.SetAttributes(attribute.String("task.id", id.String()))
-
 	query := `SELECT id, title, description, status, assignee, due_date, version, created_at, updated_at, deleted_at
               FROM tasks WHERE id = $1 AND deleted_at IS NULL`
 	task := &models.Task{}
@@ -91,16 +81,8 @@ func (r *taskRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Task, err
 	return task, nil
 }
 
-// List – фильтрация + пагинация с трассировкой
+// List – фильтрация + пагинация
 func (r *taskRepo) List(ctx context.Context, filter models.TaskFilter) ([]models.Task, int, error) {
-	ctx, span := otel.Tracer("taskflow").Start(ctx, "repository.List")
-	defer span.End()
-	span.SetAttributes(
-		attribute.String("filter.status", filter.Status),
-		attribute.Int("filter.limit", filter.Limit),
-		attribute.Int("filter.offset", filter.Offset),
-	)
-
 	conditions := []string{"deleted_at IS NULL"}
 	args := []interface{}{}
 	argPos := 1
@@ -165,15 +147,11 @@ func (r *taskRepo) List(ctx context.Context, filter models.TaskFilter) ([]models
 
 // Update – обновление задачи, история + outbox в транзакции
 func (r *taskRepo) Update(ctx context.Context, task *models.Task, history []models.TaskHistory) error {
-	ctx, span := otel.Tracer("taskflow").Start(ctx, "repository.Update")
-	defer span.End()
-	span.SetAttributes(attribute.String("task.id", task.ID.String()))
-
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	updateQuery := `UPDATE tasks
                     SET title = $1, description = $2, status = $3, assignee = $4, due_date = $5,
@@ -218,15 +196,11 @@ func (r *taskRepo) Update(ctx context.Context, task *models.Task, history []mode
 
 // Delete – мягкое удаление + outbox в транзакции
 func (r *taskRepo) Delete(ctx context.Context, id uuid.UUID) error {
-	ctx, span := otel.Tracer("taskflow").Start(ctx, "repository.Delete")
-	defer span.End()
-	span.SetAttributes(attribute.String("task.id", id.String()))
-
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	query := `UPDATE tasks SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
 	cmd, err := tx.Exec(ctx, query, id)

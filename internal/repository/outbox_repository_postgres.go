@@ -33,6 +33,7 @@ func (r *outboxRepo) GetUnprocessed(ctx context.Context, limit int) ([]models.Ou
 		return nil, err
 	}
 	defer rows.Close()
+
 	var outboxes []models.Outbox
 	for rows.Next() {
 		var o models.Outbox

@@ -112,7 +112,7 @@ func (c *Client) writePump() {
 	for {
 		message, ok := <-c.send
 		if !ok {
-			c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+			_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 			return
 		}
 		if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {

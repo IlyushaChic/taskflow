@@ -191,9 +191,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: -path /migrations -database postgres://postgres:postgres@postgres:5432/taskflow?sslmode=disable up
+    command: -path /migrations/postgres -database postgres://postgres:postgres@postgres:5432/taskflow?sslmode=disable up
     volumes:
-      - ./migrations:/migrations
+      - ./migrations/postgres:/migrations/postgres
     networks:
       - taskflow-net
 
